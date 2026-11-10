@@ -8,8 +8,14 @@ from pyrogram import Client, filters
 from pyrogram.types import InputRichMessage, Message
 
 from core import bs
-from core.queue import init_queue, close_queue
 from db import get_session
+
+try:
+    from core.queue import redis_queue
+
+    _REDIS_AVAILABLE = True
+except ImportError:
+    _REDIS_AVAILABLE = False
 from i18n import t_
 from log import logger
 from plugins.context import get_config_target
@@ -21,7 +27,6 @@ from plugins.filters import (
 )
 from plugins.helpers import build_caption, create_richtext_telegraph, format_label
 from plugins.parse.context import GIF_ONLY_SKIP_DOWNLOAD_COUNT_THRESHOLD, ParseOptions, ParseRequest
-from plugins.parse.queue_result import handle_queue_result
 from plugins.parse.reporters import MessageStatusReporter, disable_progress_on_report_forbidden
 from plugins.parse.rich import build_rich_media_blocks, is_rich_media_result, rich_caption_blocks
 from plugins.parse.sender import (
@@ -79,11 +84,6 @@ async def parse(cli: Client, msg: Message) -> None:
 
     _t = t_[lang]
 
-    if not redis_queue.connected:
-        logger.warning("Redis 不可用, 降级同步解析")
-        # 保留原有同步解析逻辑... (原代码省略, 实际需保留)
-        return
-
     if msg.command:
         match msg.command[0]:
             case "raw":
@@ -138,13 +138,41 @@ async def parse(cli: Client, msg: Message) -> None:
         )
 
 
+async def _enqueue_parse_task(req: ParseRequest) -> None:
+    """将解析任务入 Redis 队列，由 Worker 异步完成。
+
+    负载包含 task_id/chat_id/message_id/placeholder_message_id/url/user_id/mode 等。
+    """
+    from core.queue import build_task_payload
+
+    payload = build_task_payload(
+        chat_id=req.chat_id,
+        message_id=req.msg.id,
+        url=req.url,
+        user_id=req.chat_id,
+        placeholder_message_id=None,
+        mode=req.mode.value if hasattr(req.mode, "value") else str(req.mode),
+        bypass_cache=req.bypass_cache,
+        custom_content=req.custom_content,
+        delete_share_url_msg=req.delete_share_url_msg,
+    )
+    enqueued = await redis_queue.enqueue(payload)
+    if not enqueued:
+        logger.debug(f"幂等命中, 跳过入队: url={req.url}")
+
+
 @with_request_id
 async def _handle_parse_request(req: ParseRequest) -> None:
+    # 队列可用时入队交由 Worker 异步解析; 入队失败或幂等跳过时降级同步解析
+    if _REDIS_AVAILABLE and redis_queue.connected:
+        try:
+            await _enqueue_parse_task(req)
+            return
+        except Exception as e:
+            logger.warning(f"任务入队失败, 降级同步解析: {e}")
     try:
         r = await handle_parse(req)
     except ParseRateLimitExceeded as e:
-        logger.warning("队列速率限制, 降级同步解析")
-        # 保留原有同步解析逻辑...
         if e.should_notify:
             logger.warning(f"速率限制 {e.retry_after:.1f}s, chat_id={req.chat_id}, msg_id={req.msg.id}")
             text = format_label(req.t_(f"解析过于频繁, 请在 {e.retry_after:.1f}s 后重试"))

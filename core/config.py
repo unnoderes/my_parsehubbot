@@ -39,6 +39,9 @@ class BotSettings(BaseSettings):
 
     database_url: str = Field(default="sqlite+aiosqlite:///data/db/database.db")
 
+    redis_url: str = Field(default="", description="Redis 连接地址, 留空则禁用队列(同步解析)")
+    task_timeout: float = Field(default=60, gt=0, description="队列解析任务超时时间(秒), 超时后提示重试")
+
     debug: bool = Field(default=False)
     debug_skip_cleanup: bool = Field(default=False, description="跳过资源清理")
 
