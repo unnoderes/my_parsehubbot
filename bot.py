@@ -10,6 +10,7 @@ from pyrogram.handlers import ConnectHandler, DisconnectHandler
 from pyrogram.types import BotCommand, BotCommandScopeChat
 
 from core import bs, on_connect, on_disconnect, ws
+from core.queue import close_queue, init_queue
 from db.engine import close_db
 from db.init import init_db
 from i18n import ISO639_MAP
@@ -51,6 +52,10 @@ class Bot(Client):
         await init_db()
         logger.success("数据库初始化完成")
 
+        logger.info("初始化 Redis 队列...")
+        await init_queue(self)
+        logger.success("Redis 队列初始化完成")
+
         parse_cache.start_cleanup()
         cookie_health.set_notifier(partial(send_cookie_alert, self))
         await super().start(*args, **kwargs)
@@ -60,6 +65,7 @@ class Bot(Client):
 
     async def stop(self, *args: Any, **kwargs: Any) -> Client:
         ws.exit_flag = True
+        await close_queue()
         await super().stop(*args, **kwargs)
         await close_db()
         # 结束时清理下载残留
