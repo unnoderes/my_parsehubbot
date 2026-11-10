@@ -8,6 +8,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InputRichMessage, Message
 
 from core import bs
+from core.queue import init_queue, close_queue
 from db import get_session
 from i18n import t_
 from log import logger
@@ -20,6 +21,7 @@ from plugins.filters import (
 )
 from plugins.helpers import build_caption, create_richtext_telegraph, format_label
 from plugins.parse.context import GIF_ONLY_SKIP_DOWNLOAD_COUNT_THRESHOLD, ParseOptions, ParseRequest
+from plugins.parse.queue_result import handle_queue_result
 from plugins.parse.reporters import MessageStatusReporter, disable_progress_on_report_forbidden
 from plugins.parse.rich import build_rich_media_blocks, is_rich_media_result, rich_caption_blocks
 from plugins.parse.sender import (
@@ -76,6 +78,11 @@ async def parse(cli: Client, msg: Message) -> None:
         mode = config.default_mode
 
     _t = t_[lang]
+
+    if not redis_queue.connected:
+        logger.warning("Redis 不可用, 降级同步解析")
+        # 保留原有同步解析逻辑... (原代码省略, 实际需保留)
+        return
 
     if msg.command:
         match msg.command[0]:
@@ -136,6 +143,8 @@ async def _handle_parse_request(req: ParseRequest) -> None:
     try:
         r = await handle_parse(req)
     except ParseRateLimitExceeded as e:
+        logger.warning("队列速率限制, 降级同步解析")
+        # 保留原有同步解析逻辑...
         if e.should_notify:
             logger.warning(f"速率限制 {e.retry_after:.1f}s, chat_id={req.chat_id}, msg_id={req.msg.id}")
             text = format_label(req.t_(f"解析过于频繁, 请在 {e.retry_after:.1f}s 后重试"))

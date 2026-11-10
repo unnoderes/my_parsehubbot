@@ -1,6 +1,21 @@
 name: parse_hub_bot
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
   bot:
     image: ghcr.io/z-mio/parse_hub_bot:latest
     restart: unless-stopped
