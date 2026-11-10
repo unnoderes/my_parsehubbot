@@ -1,0 +1,304 @@
+<div align="center">
+
+# 🔗 ParseHubBot
+
+**Telegram 多平台聚合解析机器人**
+
+<p align="center">
+  <a href="https://github.com/z-mio/Parse_Hub_Bot/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/z-mio/Parse_Hub_Bot?style=flat-square&color=5D6D7E" alt="License">
+  </a>
+  <a href="https://www.python.org/">
+    <img src="https://img.shields.io/badge/Python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python">
+  </a>
+  <a href="https://t.me/ParseHubot">
+    <img src="https://img.shields.io/badge/Telegram-Bot-2CA5E0?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot">
+  </a>
+  <a href="https://github.com/astral-sh/uv">
+    <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square" alt="uv">
+  </a>
+</p>
+
+简体中文 |
+[English](README.en.md)
+
+[**🤖 实例演示**](https://t.me/ParseHubot) ·
+[**📚 相关项目**](https://github.com/z-mio/ParseHub) ·
+[**🐛 问题反馈**](https://github.com/z-mio/Parse_Hub_Bot/issues)
+
+</div>
+
+---
+
+> 官方实例：[@ParseHubot](https://t.me/ParseHubot)
+
+## ✨ 功能特性
+
+- 🎬 **多平台解析** — 抖音、B站、YouTube、小红书、Twitter 等 20+ 主流平台一站搞定
+- ⚡ **内联模式** — 在任意聊天窗口输入 `@BotUsername <链接>` 即可解析
+- 👥 **访客模式** — 在任意聊天内 `@BotUsername` 即可解析
+- 🖼️ **Tg 兼容** — 自动转码、长图切割、大视频分段
+- 📦 **多种模式** — 在线预览, 原始文件, 打包下载
+- 🐳 **Docker 部署** — 开箱即用
+
+## 📦 支持平台一览
+
+| 平台            | 视频 | 图文 | 其他                        |
+|-----------------|:----:|:----:|-----------------------------|
+| **Twitter / X** |  ✅  |  ✅  | 📝 文章                     |
+| **Instagram**   |  ✅  |  ✅  |                             |
+| **YouTube**     |  ✅  |      | 🎵 音乐                     |
+| **Facebook**    |  ✅  |      |                             |
+| **Threads**     |  ✅  |  ✅  |                             |
+| **Bilibili**    |  ✅  |      | 📝 动态, 🎵 音乐            |
+| **抖音**        |  ✅  |  ✅  | ☀️日常                      |
+| **TikTok**      |  ✅  |  ✅  |                             |
+| **微博**        |  ✅  |  ✅  |                             |
+| **小红书**      |  ✅  |  ✅  |                             |
+| **贴吧**        |  ✅  |  ✅  |                             |
+| **微信公众号**  |      |  ✅  |                             |
+| **微信视频号**  |  ✅  |      |                             |
+| **快手**        |  ✅  |  ✅  |                             |
+| **酷安**        |      |  ✅  |                             |
+| **皮皮虾**      |  ✅  |  ✅  |                             |
+| **最右**        |  ✅  |  ✅  |                             |
+| **小黑盒**      |  ✅  |  ✅  |                             |
+| **Snapchat**    |  ✅  |      |                             |
+| **知乎**        |  ✅  |  ✅  | 🐶 问答, 专栏, 圈子, 日报   |
+| **豆瓣**        |  ✅  |  ✅  | 👥 小组话题                 |
+| **Bangumi**     |      |  ✅  | 💬 条目讨论, 日志, 小组话题 |
+| **今日头条**    |  ✅  |  ✅  | 📰 文章, 微头条             |
+| **Medium**      |  ✅  |  ✅  | 📰 文章                     |
+
+> 🔧 更多平台持续接入中...
+
+## 🚀 快速开始
+
+### 🐳 Docker 运行 (推荐)
+
+```bash
+mkdir parse_hub_bot && cd parse_hub_bot
+
+docker run -d \
+  --restart=always \
+  -e API_ID=你的API_ID \
+  -e API_HASH=你的API_HASH \
+  -e BOT_TOKEN=你的BOT_TOKEN \
+  -e ADMIN_IDS=你的TG用户ID \
+  -v ./logs:/app/logs \
+  -v ./data:/app/data \
+  --name parse-hub-bot \
+  ghcr.io/z-mio/parse_hub_bot:latest
+```
+
+### 💻 源码运行
+
+```bash
+uv sync
+uv run bot.py
+```
+
+---
+
+## ⚙️ 配置说明
+
+- **环境变量:** 基础配置
+- **平台配置 (可选):** 平台代理和 Cookie
+
+### 📝 环境变量
+
+```dotenv
+# ✅ 必填
+API_ID=        # Telegram API ID，登录 https://my.telegram.org 获取
+API_HASH=      # Telegram API Hash，同上获取
+BOT_TOKEN=     # 机器人 Token，向 @BotFather 申请
+
+# 🔲 可选
+BOT_PROXY=     # Bot 连接 TG 使用的代理，例：http://127.0.0.1:7890
+ADMIN_IDS=     # 管理员的 TG 用户 ID，逗号分隔，例：123456789,987654321
+               # 管理员可私聊使用 /admin 管理平台配置，并接收 Cookie 失效告警
+```
+
+### 🌐 平台配置
+
+用于为各解析平台单独配置 **代理** 和 **Cookie**，推荐通过 `/admin` 在线管理，修改后立即生效，无需重启。
+
+#### 🛠️ 在线管理
+
+1. 在 `.env` 中填写 `ADMIN_IDS`
+2. 私聊 Bot 发送 `/admin` 打开配置面板
+
+- **全局默认代理** — 设置解析 / 下载的默认代理池
+- **平台配置** — 按平台选择代理模式（全局 / 专用 / 直连），管理专用代理池和 Cookie
+- **一键测试** — 测试代理连通性；发送链接，用所选 Cookie 逐条解析验证是否可用
+- **失效告警** — Cookie 连续解析失败 3 次时通知管理员，可直接跳转更换并用原链接重试
+- **导入 / 导出** — 导出完整配置备份，导入文件或 YAML 整份替换；手动改过文件后点「重载配置」生效
+
+### 🔀 代理优先级
+
+解析代理和下载代理各自遵循相同的优先级逻辑：
+
+```
+禁用代理 (disable_*_proxy: true)
+  ↓ 未禁用
+平台专用代理 (parser_proxies / downloader_proxies)
+  ↓ 未配置
+全局默认代理 (default_parser_proxies / default_downloader_proxies)
+  ↓ 未配置
+直连（不使用代理）
+```
+
+> 💡 当代理池中有多个地址时，每次请求会 **随机选取**一个
+
+### 🍪 支持 Cookie 的平台
+
+- `Twitter / X`
+- `Instagram`
+- `Threads`
+- `YouTube`
+- `Bilibili`
+- `抖音`
+- `TikTok`
+- `快手`
+- `小红书`
+- `知乎`
+- `豆瓣`
+- `微信视频号`（需要填腾讯元宝 yuanbao.tencent.com 登录后的 Cookie）
+
+<details>
+<summary>📄 手动编辑配置文件</summary>
+
+配置文件位于 `data/config/platform_config.yaml`，也可以直接编辑，修改后在 `/admin` 点「重载配置」或重启 Bot 生效。
+
+```yaml
+# ═══════════════════════ 全局默认代理 ═══════════════════════
+# 当某平台未单独配置代理时，会使用全局默认代理
+# 支持填写单个地址(字符串)或多个地址(列表，随机选取)
+# 支持 http://、https://、socks5://、socks5h:// 协议
+
+default_parser_proxies: http://127.0.0.1:7890        # 解析代理（单个）
+default_downloader_proxies: # 下载代理（代理池）
+  - http://127.0.0.1:7890
+  - http://127.0.0.1:7891
+
+# ═══════════════════════ 平台独立配置 ═══════════════════════
+platforms:
+  <platform_id>: # 平台 ID，见下方支持列表
+    disable_parser_proxy: false          # 是否禁用解析代理（直连）
+    disable_downloader_proxy: false      # 是否禁用下载代理（直连）
+    parser_proxies: # 该平台专用解析代理池
+      - http://proxy1:port
+    downloader_proxies: # 该平台专用下载代理池
+      - http://proxy2:port
+    cookies: # 该平台 Cookie 列表（随机选取）
+      - "cookie_string_1"
+      - "cookie_string_2"
+```
+
+#### 🔑 支持的平台 ID
+
+`<platform_id>` 必须是以下合法的平台 ID：
+
+| 平台 ID           | 对应平台    | 平台 ID     | 对应平台   |
+|:------------------|:------------|:------------|:-----------|
+| `twitter`         | Twitter / X | `instagram` | Instagram  |
+| `youtube`         | YouTube     | `facebook`  | Facebook   |
+| `threads`         | Threads     | `bilibili`  | 哔哩哔哩   |
+| `douyin`          | 抖音        | `tiktok`    | TikTok     |
+| `weibo`           | 微博        | `xhs`       | 小红书     |
+| `tieba`           | 百度贴吧    | `weixin`    | 微信公众号 |
+| `weixin_channels` | 微信视频号  | `kuaishou`  | 快手       |
+| `coolapk`         | 酷安        | `pipix`     | 皮皮虾     |
+| `zuiyou`          | 最右        | `xiaoheihe` | 小黑盒     |
+| `snapchat`        | Snapchat    | `zhihu`     | 知乎       |
+| `douban`          | 豆瓣        | `bangumi`   | Bangumi    |
+| `toutiao`         | 今日头条    | `medium`    | Medium     |
+
+#### 📌 配置示例
+
+##### 示例 1：国内平台直连，海外平台走代理
+
+```yaml
+default_parser_proxies: http://127.0.0.1:7890
+default_downloader_proxies: http://127.0.0.1:7890
+
+platforms:
+  bilibili:
+    disable_parser_proxy: true
+    disable_downloader_proxy: true
+  douyin:
+    disable_parser_proxy: true
+    disable_downloader_proxy: true
+  xhs:
+    disable_parser_proxy: true
+    disable_downloader_proxy: true
+```
+
+##### 示例 2：Twitter 配置 Cookie + 使用全局代理
+
+```yaml
+default_parser_proxies: http://127.0.0.1:7890
+default_downloader_proxies: http://127.0.0.1:7890
+
+platforms:
+  twitter:
+    cookies:
+      - "auth_token=your_token_here; ct0=your_ct0_here"
+```
+
+##### 示例 3：YouTube 使用独立代理池
+
+```yaml
+platforms:
+  youtube:
+    parser_proxies:
+      - http://proxy-us-1:8080
+      - http://proxy-us-2:8080
+      - http://proxy-eu-1:8080
+    downloader_proxies:
+      - http://proxy-us-1:8080
+      - http://proxy-eu-1:8080
+```
+
+##### 示例 4：B站指定 Cookie 轮换 + 解析直连 + 下载走代理
+
+```yaml
+platforms:
+  bilibili:
+    disable_parser_proxy: true
+    downloader_proxies:
+      - http://127.0.0.1:7890
+    cookies:
+      - "SESSDATA=xxx; bili_jct=xxx; buvid3=xxx"
+      - "SESSDATA=yyy; bili_jct=yyy; buvid3=yyy"
+```
+
+</details>
+
+## 🤝 参与贡献
+
+欢迎提交 Pull Request 或 Issue!
+
+- 核心解析相关请前往 [ParseHub](https://github.com/z-mio/ParseHub)
+- Bug 反馈请附上相关 URL 和日志信息
+
+### 开发规范
+
+提交代码前请至少执行:
+
+```bash
+ruff format && ruff check --fix && uv run mypy
+uv run pytest
+```
+
+## 📄 开源协议
+
+本项目基于 [MIT License](LICENSE) 协议开源
+
+---
+
+<div align="center">
+
+**如果这个项目对你有帮助，欢迎点个 ⭐ Star!**
+
+</div>

@@ -1,0 +1,7 @@
+/.venv
+/logs
+/.idea
+/downloads
+.env
+*.session
+/data
