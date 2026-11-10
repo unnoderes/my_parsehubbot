@@ -1,6 +1,23 @@
 name: parse_hub_bot
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-parsehub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-parsehub_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-parsehub}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -14,13 +31,21 @@ services:
       timeout: 5s
       retries: 5
 
-volumes:
-  redis_data:
   bot:
     image: ghcr.io/z-mio/parse_hub_bot:latest
     restart: unless-stopped
     env_file:
       - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - data:/app/data
       - logs:/app/logs
+
+volumes:
+  postgres_data:
+  redis_data:
+  data:
