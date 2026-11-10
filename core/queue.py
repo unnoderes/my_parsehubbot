@@ -30,11 +30,15 @@ class RedisQueueUnavailable(Exception):
     """Redis 不可用, 调用方应降级为同步解析。"""
 
 
+_bot_instance_id: str | None = None
+
+
 def bot_instance_id() -> str:
     """当前 Bot 实例唯一标识, 用于结果 Pub/Sub 频道隔离。"""
-    if not hasattr(bot_instance_id, "_id"):
-        bot_instance_id._id = socket.gethostname() + "-" + uuid.uuid4().hex[:8]  # type: ignore[attr-defined]
-    return bot_instance_id._id  # type: ignore[attr-defined]
+    global _bot_instance_id
+    if _bot_instance_id is None:
+        _bot_instance_id = socket.gethostname() + "-" + uuid.uuid4().hex[:8]
+    return _bot_instance_id
 
 
 def result_channel(instance_id: str | None = None) -> str:
