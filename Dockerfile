@@ -37,6 +37,6 @@ ENV LD_PRELOAD=libjemalloc.so.2
 
 WORKDIR /app
 COPY --from=build /app /app
-
+COPY --from=build /bin/uv /bin/uvx /usr/local/bin/
 
 CMD ["python", "bot.py"]
