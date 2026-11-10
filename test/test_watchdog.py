@@ -163,7 +163,9 @@ def test_hanging_stop_times_out_and_exits(watchdog_state: list[int]) -> None:
         client = HangingClient(session)
 
         await disconnect(client, session)
-        await asyncio.sleep(0.24)
+        async with asyncio.timeout(1):
+            while not watchdog_state:
+                await asyncio.sleep(0.005)
 
         assert watchdog_state == [1]
         assert client.stop_calls == 1
