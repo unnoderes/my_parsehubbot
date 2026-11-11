@@ -1,0 +1,3 @@
+FROM parse_hub_bot:latest
+WORKDIR /app
+CMD ["python", "worker.py"]
