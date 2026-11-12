@@ -125,25 +125,60 @@ class ParseWorker:
             bot_token=bs.bot_token,
             workdir=str(bs.sessions_path),
         )
-        await self._cli.start()
+        # Telegram 对同一 bot token 的登录有频率限制, 多实例/反复重启会触发 FloodWait.
+        # 按服务端要求 sleep 后重试, 避免进程崩溃被 Docker 反复重启加重限流
+        from pyrogram.errors import FloodWait as _FloodWait
+
+        for _att in range(30):
+            try:
+                await self._cli.start()
+                break
+            except _FloodWait as _fe:
+                _wait = int(getattr(_fe, "value", 60) or 60)
+                logger.warning(f"Telegram 登录限流, 等待 {_wait} 秒后重试 (第 {_att + 1}/30 次)")
+                await asyncio.sleep(min(_wait, 300))
         cli = self._cli
         cookie_health.set_notifier(lambda alert: send_cookie_alert(cli, alert))
         self._running = True
         self._retry_task = asyncio.create_task(self._retry_loop())
+        self._running = True
+        # 连接可能在中途被 Redis 服务端/网络抖动关闭, 这里整体捕获连接类异常,
+        # 重建连接后继续消费, 避免进程退出导致 Docker 反复重启 (设计文档"网络抖动"风险预案)
         try:
             while self._running:
-                item = await self._client.brpop(PARSE_TASKS_QUEUE, timeout=5)
-                if item is None:
-                    continue
-                _, raw = item
                 try:
-                    payload = json.loads(raw)
-                except json.JSONDecodeError:
-                    logger.warning("丢弃无法解析的任务负载")
-                    continue
-                await self.process_task(payload)
-        except asyncio.CancelledError:
-            pass
+                    try:
+                        await self._client.ping()
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Redis 连接已断开, 重建连接")
+                        try:
+                            await self._client.aclose()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        self._client = aioredis.from_url(
+                            bs.redis_url,
+                            decode_responses=True,
+                            socket_connect_timeout=5,
+                            socket_timeout=5,
+                        )
+                        await self._client.ping()
+                        logger.success("Redis 连接已恢复")
+                    item = await self._client.brpop(PARSE_TASKS_QUEUE, timeout=5)
+                    if item is None:
+                        continue
+                    _, raw = item
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        logger.warning("丢弃无法解析的任务负载")
+                        continue
+                    await self.process_task(payload)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:  # noqa: BLE001
+                    logger.exception(e)
+                    logger.warning("消费循环异常, 3 秒后重试")
+                    await asyncio.sleep(3)
         finally:
             self._running = False
             if self._retry_task is not None:

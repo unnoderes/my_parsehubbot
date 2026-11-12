@@ -70,7 +70,11 @@ class BotSettings(BaseSettings):
 
     @property
     def bot_session_name(self) -> str:
-        return f"bot_{self.bot_token.split(':')[0]}"
+        # 多实例部署时每个容器 hostname 不同, 用 hostname 区分 session 文件,
+        # 避免共享卷上多个 Bot 进程争抢同一个 SQLite 会话文件导致 "database is locked"
+        import socket
+
+        return f"{socket.gethostname()}_{self.bot_token.split(':')[0]}"
 
     @field_validator("admin_ids", mode="before")
     @classmethod
