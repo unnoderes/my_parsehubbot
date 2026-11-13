@@ -4,6 +4,7 @@ Bot 与 Worker 解耦的消息队列协议:
 - 任务负载序列化为 JSON 后 LPUSH 到 `parse_tasks` 队列
 - 使用 SETNX + TTL 做幂等检查, 避免重复解析相同链接
 - Worker 完成后 PUBLISH 结果到 `result:{bot_instance_id}` 频道
+- Worker 的管理员告警 PUBLISH 到 `admin_alerts` 频道, 由 Bot 代发,Worker 无需登录 Telegram
 """
 
 import asyncio
@@ -24,6 +25,10 @@ logger = logger.bind(name="RedisQueue")
 PARSE_TASKS_QUEUE = "parse_tasks"
 IDEMPOTENCY_TTL = 300  # 幂等键有效期(秒), 短时间内相同 URL 不重复入队
 TASK_TIMEOUT = 60  # Worker 超时时间(秒), 超时后 Bot 编辑占位消息
+ADMIN_ALERTS_CHANNEL = "admin_alerts"  # Worker -> Bot 的管理员告警频道
+
+ALERT_COOKIE = "cookie"
+ALERT_WORKER = "worker"
 
 
 class RedisQueueUnavailable(Exception):
@@ -43,6 +48,15 @@ def bot_instance_id() -> str:
 
 def result_channel(instance_id: str | None = None) -> str:
     return f"result:{instance_id or bot_instance_id()}"
+
+
+def admin_alerts_channel() -> str:
+    return ADMIN_ALERTS_CHANNEL
+
+
+def build_alert_payload(kind: str, **data: Any) -> dict[str, Any]:
+    """构建管理员告警负载, 序列化为 JSON 后 PUBLISH。"""
+    return {"kind": kind, **data}
 
 
 class ParseTaskPayload(dict):
@@ -90,7 +104,10 @@ class RedisQueue:
         self._client: aioredis.Redis | None = None
         self._pubsub: aioredis.client.PubSub | None = None
         self._listener_task: asyncio.Task[None] | None = None
+        self._alert_pubsub: aioredis.client.PubSub | None = None
+        self._alert_task: asyncio.Task[None] | None = None
         self._result_handlers: list[Any] = []
+        self._alert_handlers: list[Any] = []
 
     @property
     def connected(self) -> bool:
@@ -113,12 +130,19 @@ class RedisQueue:
 
     async def close(self) -> None:
         await self.stop_result_listener()
+        await self.stop_alert_listener()
         if self._pubsub is not None:
             try:
                 await self._pubsub.aclose()
             except Exception as e:
                 logger.debug(f"关闭 Pub/Sub 失败: {e}")
             self._pubsub = None
+        if self._alert_pubsub is not None:
+            try:
+                await self._alert_pubsub.aclose()
+            except Exception as e:
+                logger.debug(f"关闭告警 Pub/Sub 失败: {e}")
+            self._alert_pubsub = None
         if self._client is not None:
             try:
                 await self._client.aclose()
@@ -161,6 +185,10 @@ class RedisQueue:
         """注册结果回调 handler(result: dict) -> Awaitable[None]"""
         self._result_handlers.append(handler)
 
+    def on_alert(self, handler: Any) -> None:
+        """注册管理员告警回调 handler(alert: dict) -> Awaitable[None]"""
+        self._alert_handlers.append(handler)
+
     async def start_result_listener(self) -> None:
         """订阅本实例的结果频道, 后台任务分发回调。"""
         if self._client is None:
@@ -172,6 +200,17 @@ class RedisQueue:
         self._listener_task = asyncio.create_task(self._listen_results())
         logger.info(f"已订阅结果频道: {result_channel()}")
 
+    async def start_alert_listener(self) -> None:
+        """订阅 Worker 的管理员告警频道, 后台任务分发回调。"""
+        if self._client is None:
+            raise RedisQueueUnavailable("Redis 未连接")
+        if self._alert_task is not None:
+            return
+        self._alert_pubsub = self._client.pubsub()
+        await self._alert_pubsub.subscribe(admin_alerts_channel())
+        self._alert_task = asyncio.create_task(self._listen_alerts())
+        logger.info(f"已订阅管理员告警频道: {admin_alerts_channel()}")
+
     async def stop_result_listener(self) -> None:
         if self._listener_task is not None:
             self._listener_task.cancel()
@@ -181,26 +220,41 @@ class RedisQueue:
                 pass
             self._listener_task = None
 
+    async def stop_alert_listener(self) -> None:
+        if self._alert_task is not None:
+            self._alert_task.cancel()
+            try:
+                await self._alert_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._alert_task = None
+
     async def _listen_results(self) -> None:
-        assert self._pubsub is not None
+        await self._listen_channel(self._pubsub, self._result_handlers, "结果")
+
+    async def _listen_alerts(self) -> None:
+        await self._listen_channel(self._alert_pubsub, self._alert_handlers, "管理员告警")
+
+    async def _listen_channel(self, pubsub: aioredis.client.PubSub | None, handlers: list[Any], label: str) -> None:
+        assert pubsub is not None
         while True:
             try:
-                message = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                 if message is None or message["type"] != "message":
                     continue
                 data = message["data"]
                 if isinstance(data, bytes):
                     data = data.decode("utf-8")
-                result = json.loads(data)
-                for handler in self._result_handlers:
+                payload = json.loads(data)
+                for handler in handlers:
                     try:
-                        await handler(result)
+                        await handler(payload)
                     except Exception as e:
-                        logger.opt(exception=e).error("结果回调处理异常")
+                        logger.opt(exception=e).error(f"{label}回调处理异常")
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.warning(f"结果监听异常, 1s 后继续: {e}")
+                logger.warning(f"{label}监听异常, 1s 后继续: {e}")
                 await asyncio.sleep(1)
 
 
@@ -218,11 +272,28 @@ async def init_queue(cli: Any) -> None:
         logger.warning(f"{e}, 队列已禁用, 降级为同步解析")
         return
     redis_queue.on_result(make_result_handler(cli))
+    redis_queue.on_alert(make_alert_handler(cli))
     await redis_queue.start_result_listener()
+    await redis_queue.start_alert_listener()
 
 
 async def close_queue() -> None:
     await redis_queue.close()
+
+
+async def publish_admin_alert(alert: dict[str, Any]) -> bool:
+    """向管理员告警频道 PUBLISH, 返回是否成功。
+
+    Worker 不持有 Telegram 客户端, 用它把告警交给 Bot 代发; Redis 不可用时返回 False。
+    """
+    if redis_queue._client is None:
+        return False
+    try:
+        await redis_queue._client.publish(admin_alerts_channel(), json.dumps(alert, ensure_ascii=False))
+    except Exception as e:
+        logger.warning(f"发布管理员告警失败: {e}")
+        return False
+    return True
 
 
 def make_result_handler(cli: Any) -> Any:
@@ -235,5 +306,26 @@ def make_result_handler(cli: Any) -> Any:
 
     async def handler(result: dict[str, Any]) -> None:
         await handle_queue_result(cli, result)
+
+    return handler
+
+
+def make_alert_handler(cli: Any) -> Any:
+    """构建管理员告警回调: Worker 侧告警经 Redis 转发到 Bot, 由 Bot 的 Telegram 客户端代发。
+
+    告警负载协议(由 Worker 定义):
+    - {kind: "cookie", platform_id, cookie, fail_streak, last_error, url}
+    - {kind: "worker", message}
+    """
+    from plugins.admin.alert import send_cookie_alert_from_payload, send_text_alert
+
+    async def handler(alert: dict[str, Any]) -> None:
+        kind = alert.get("kind")
+        if kind == ALERT_COOKIE:
+            await send_cookie_alert_from_payload(cli, alert)
+        elif kind == ALERT_WORKER:
+            await send_text_alert(cli, str(alert.get("message") or "Worker 告警"))
+        else:
+            logger.warning(f"未知的管理员告警类型: {kind}")
 
     return handler

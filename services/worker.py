@@ -9,6 +9,8 @@
 - 幂等: 相同 task_id 或 url_hash 的结果只解析一次, 完成的任务直接重发结果
 - 失败时进入死信队列 parse_tasks_failed, 每 5 分钟重试, 最多 3 次, 之后告警
 - 多 Worker 实例通过 WORKER_ID 区分, 均可安全阻塞消费与认领
+- Worker 不持有 Telegram 客户端: 管理员告警(cookie 失效 / 死信耗尽)经 Redis
+  admin_alerts 频道转发, 由 Bot 代发, 避免多实例重复登录同一 bot token 触发 FLOOD_WAIT
 """
 
 from __future__ import annotations
@@ -19,13 +21,18 @@ import time
 from typing import Any
 
 import redis.asyncio as aioredis
-from pyrogram import Client
 
 from core import bs
-from core.queue import PARSE_TASKS_QUEUE, TASK_TIMEOUT, url_hash
+from core.queue import (
+    ALERT_COOKIE,
+    ALERT_WORKER,
+    PARSE_TASKS_QUEUE,
+    TASK_TIMEOUT,
+    publish_admin_alert,
+    url_hash,
+)
 from i18n import t_
 from log import logger
-from plugins.admin.alert import send_cookie_alert
 from plugins.parse.context import ParseOptions
 from repo.settings import ParseMode
 from services import cookie_health, persistent_cache
@@ -87,7 +94,7 @@ def _summarize(parse_result: Any) -> str:
 
 
 class ParseWorker:
-    """Redis 解析任务消费者。"""
+    """Redis 解析任务消费者(纯计算节点, 不连接 Telegram)。"""
 
     def __init__(self, worker_id: str, client: Any | None = None) -> None:
         self.worker_id = worker_id
@@ -96,7 +103,6 @@ class ParseWorker:
         )
         self._running = False
         self._retry_task: asyncio.Task[None] | None = None
-        self._cli: Client | None = None
 
     async def connect(self) -> None:
         await self._client.ping()
@@ -118,30 +124,11 @@ class ParseWorker:
         from db.init import init_db
 
         await init_db()
-        self._cli = Client(
-            f"worker_{self.worker_id}",
-            api_id=bs.api_id,
-            api_hash=bs.api_hash,
-            bot_token=bs.bot_token,
-            workdir=str(bs.sessions_path),
-        )
-        # Telegram 对同一 bot token 的登录有频率限制, 多实例/反复重启会触发 FloodWait.
-        # 按服务端要求 sleep 后重试, 避免进程崩溃被 Docker 反复重启加重限流
-        from pyrogram.errors import FloodWait as _FloodWait
-
-        for _att in range(30):
-            try:
-                await self._cli.start()
-                break
-            except _FloodWait as _fe:
-                _wait = int(getattr(_fe, "value", 60) or 60)
-                logger.warning(f"Telegram 登录限流, 等待 {_wait} 秒后重试 (第 {_att + 1}/30 次)")
-                await asyncio.sleep(min(_wait, 300))
-        cli = self._cli
-        cookie_health.set_notifier(lambda alert: send_cookie_alert(cli, alert))
+        # Worker 不再持有 Telegram 客户端: cookie 失效告警直接转发给 Bot 代发,
+        # 这样任意数量的 Worker 都不会增加 bot token 的登录次数, 消除 FLOOD_WAIT 根因。
+        cookie_health.set_notifier(self._publish_cookie_alert)
         self._running = True
         self._retry_task = asyncio.create_task(self._retry_loop())
-        self._running = True
         # 连接可能在中途被 Redis 服务端/网络抖动关闭, 这里整体捕获连接类异常,
         # 重建连接后继续消费, 避免进程退出导致 Docker 反复重启 (设计文档"网络抖动"风险预案)
         try:
@@ -183,11 +170,6 @@ class ParseWorker:
             self._running = False
             if self._retry_task is not None:
                 self._retry_task.cancel()
-            if self._cli is not None:
-                try:
-                    await self._cli.stop()
-                except Exception as e:  # noqa: BLE001
-                    logger.debug(f"关闭 Telegram 客户端失败: {e}")
             try:
                 await self._client.aclose()
             except Exception as e:  # noqa: BLE001
@@ -207,6 +189,20 @@ class ParseWorker:
                     logger.warning("丢弃无法解析的死信任务")
                     continue
                 await self.process_task(payload)
+
+    async def _publish_cookie_alert(self, alert: Any) -> None:
+        """cookie 失效通知: 序列化必要字段经 Redis 转发给 Bot 代发。"""
+        payload = {
+            "kind": ALERT_COOKIE,
+            "platform_id": alert.platform_id,
+            "cookie": alert.cookie,
+            "fail_streak": alert.stat.fail_streak,
+            "last_error": alert.stat.last_error,
+            "url": alert.url,
+        }
+        ok = await publish_admin_alert(payload)
+        if not ok:
+            logger.warning("Redis 不可用, cookie 告警未能转发给 Bot")
 
     async def process_task(self, payload: dict[str, Any]) -> None:
         """处理单条任务: 幂等检查后执行解析或重发已完成结果。"""
@@ -345,10 +341,7 @@ class ParseWorker:
         logger.warning(f"任务进入死信队列(第 {attempt} 次重试): task_id={payload.get('task_id')}")
 
     async def _alert(self, payload: dict[str, Any], error: str) -> None:
-        """重试耗尽后告警: 通过 /admin 通知管理员。
-
-        复用 Bot 的告警通道, 将失败任务作为 CookieAlert 同级的管理通知送达 admin_ids。
-        """
+        """重试耗尽后告警: 经 Redis 转发给 Bot, 由 Bot 的 Telegram 客户端代发给管理员。"""
         message = (
             f"[Worker 告警] 任务解析失败且重试耗尽\n"
             f"task_id={payload.get('task_id')}\n"
@@ -356,10 +349,6 @@ class ParseWorker:
             f"error={error}"
         )
         logger.error(message)
-        for uid in bs.admin_ids:
-            try:
-                if self._cli is None:
-                    break
-                await self._cli.send_message(uid, message)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"向管理员 {uid} 发送 Worker 告警失败: {e}")
+        ok = await publish_admin_alert({"kind": ALERT_WORKER, "message": message})
+        if not ok:
+            logger.warning("Redis 不可用, Worker 告警未能转发给 Bot")
