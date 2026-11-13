@@ -1,11 +1,95 @@
 name: parse_hub_bot
 
 services:
-  bot:
-    image: ghcr.io/z-mio/parse_hub_bot:latest
+  postgres:
+    container_name: postgres
+    image: postgres:16-alpine
     restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - data:/app/data
-      - logs:/app/logs
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-parsehub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-parsehub_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-parsehub}
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [app]
+
+  redis:
+    container_name: redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [app]
+
+  bot-1: &bot
+    container_name: bot-1
+    build: {context: ., dockerfile: Dockerfile}
+    image: parse_hub_bot:latest
+    restart: unless-stopped
+    command: uv run bot.py
+    env_file: [.env]
+    environment: &bot-env
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://parsehub:parsehub_dev@postgres:5432/parsehub}
+      BOT_INSTANCE_ID: bot-1
+    depends_on: &backend
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    volumes: [data:/app/data, logs:/app/logs]
+    networks: [app]
+  bot-2:
+    <<: *bot
+    container_name: bot-2
+    environment: {<<: *bot-env, BOT_INSTANCE_ID: bot-2}
+  bot-3:
+    <<: *bot
+    container_name: bot-3
+    environment: {<<: *bot-env, BOT_INSTANCE_ID: bot-3}
+
+  worker-1: &worker
+    container_name: worker-1
+    build: {context: ., dockerfile: Dockerfile.worker}
+    image: parse_hub_worker:latest
+    restart: unless-stopped
+    command: python worker.py
+    env_file: [.env]
+    environment: &worker-env
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://parsehub:parsehub_dev@postgres:5432/parsehub}
+      WORKER_ID: worker-1
+    depends_on: *backend
+    volumes: [download_cache:/app/downloads, logs:/app/logs]
+    networks: [app]
+  worker-2:
+    <<: *worker
+    container_name: worker-2
+    environment: {<<: *worker-env, WORKER_ID: worker-2}
+
+  nginx:
+    container_name: nginx
+    image: nginx:alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    depends_on: [bot-1, bot-2, bot-3]
+    networks: [app]
+
+volumes:
+  postgres_data:
+  redis_data:
+  data:
+  download_cache:
+  logs:
+networks:
+  app:
+    driver: bridge

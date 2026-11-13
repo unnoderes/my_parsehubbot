@@ -37,7 +37,14 @@ class BotSettings(BaseSettings):
 
     download_dir: Path = Path("downloads")
 
-    database_url: str = Field(default="sqlite+aiosqlite:///data/db/database.db")
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///data/db/database.db",
+        description="SQLAlchemy 连接串; 并发部署使用 PostgreSQL, 例如 "
+        "postgresql+asyncpg://user:pass@postgres:5432/parsehub",
+    )
+
+    redis_url: str = Field(default="", description="Redis 连接地址, 留空则禁用队列(同步解析)")
+    task_timeout: float = Field(default=60, gt=0, description="队列解析任务超时时间(秒), 超时后提示重试")
 
     debug: bool = Field(default=False)
     debug_skip_cleanup: bool = Field(default=False, description="跳过资源清理")
@@ -63,7 +70,11 @@ class BotSettings(BaseSettings):
 
     @property
     def bot_session_name(self) -> str:
-        return f"bot_{self.bot_token.split(':')[0]}"
+        # 多实例部署时每个容器 hostname 不同, 用 hostname 区分 session 文件,
+        # 避免共享卷上多个 Bot 进程争抢同一个 SQLite 会话文件导致 "database is locked"
+        import socket
+
+        return f"{socket.gethostname()}_{self.bot_token.split(':')[0]}"
 
     @field_validator("admin_ids", mode="before")
     @classmethod

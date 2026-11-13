@@ -10,6 +10,7 @@ from pyrogram.handlers import ConnectHandler, DisconnectHandler
 from pyrogram.types import BotCommand, BotCommandScopeChat
 
 from core import bs, on_connect, on_disconnect, ws
+from core.queue import close_queue, init_queue
 from db.engine import close_db
 from db.init import init_db
 from i18n import ISO639_MAP
@@ -51,6 +52,10 @@ class Bot(Client):
         await init_db()
         logger.success("数据库初始化完成")
 
+        logger.info("初始化 Redis 队列...")
+        await init_queue(self)
+        logger.success("Redis 队列初始化完成")
+
         parse_cache.start_cleanup()
         cookie_health.set_notifier(partial(send_cookie_alert, self))
         await super().start(*args, **kwargs)
@@ -60,6 +65,7 @@ class Bot(Client):
 
     async def stop(self, *args: Any, **kwargs: Any) -> Client:
         ws.exit_flag = True
+        await close_queue()
         await super().stop(*args, **kwargs)
         await close_db()
         # 结束时清理下载残留
@@ -104,5 +110,29 @@ class Bot(Client):
 
 
 if __name__ == "__main__":
+    from pyrogram.errors import FloodWait
+
     bot = Bot()
-    bot.run()
+    # Telegram 对同一 bot token 的登录(auth.ImportBotAuthorization)有频率限制,
+    # 多实例同时启动或容器反复重启会触发 FLOOD_WAIT_X(需等待数分钟)。
+    # 这里捕获后按服务端要求 sleep 再重试, 避免进程退出被 Docker 反复重启加重限流
+    # (设计文档"网络抖动/风险预案"要求的容错)。
+    max_retries = 30
+    for attempt in range(max_retries):
+        try:
+            bot.run()
+            break
+        except FloodWait as e:
+            wait = int(getattr(e, "value", 60) or 60)
+            logger.warning(f"Telegram 登录限流, 等待 {wait} 秒后重试 (第 {attempt + 1}/{max_retries} 次)")
+            import time
+
+            time.sleep(min(wait, 300))
+        except KeyboardInterrupt:
+            logger.info("收到中断信号, 退出")
+            break
+        except Exception as e:  # noqa: BLE001
+            logger.exception(e)
+            import time
+
+            time.sleep(15)

@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
     "alembic>=1.18.5",
+    "asyncpg>=0.30.0",
     "easy-ai18n>=1.2.1",
     "haishoku>=1.1.8",
     "httpx[socks]>=0.28.1",
@@ -21,6 +22,7 @@ dependencies = [
     "pydantic-settings>=2.11.0",
     "python-dotenv>=1.0.1",
     "pyyaml>=6.0.3",
+    "redis>=5.0.0",
     "sqlalchemy[asyncio]>=2.0.51,<2.1",
     "telegraph>=2.2.0",
     "tgcrypto>=1.2.5",
@@ -51,6 +53,8 @@ dev = [
     "easy-ai18n[builder]>=1.2.1",
     "mypy>=2.1.0",
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
 ]
 
 [tool.mypy]
@@ -64,6 +68,7 @@ disallow_untyped_defs = true
 no_implicit_optional = true
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 testpaths = ["test"]
 pythonpath = ["."]
 python_files = ["test_*.py"]
